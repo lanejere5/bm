@@ -5,8 +5,12 @@
 '''
 import numpy as np
 import random
+import matplotlib.pyplot as plt
 
 learning_rate = 0.01
+
+def sigmoid(x):
+    return np.divide(1., 1.+np.exp(-x))
 
 class RBM:
 
@@ -18,11 +22,7 @@ class RBM:
         self.W = np.zeros((self.v_dim,self.h_dim))
         self.a = np.zeros((self.v_dim,1))
         self.b = np.zeros((self.h_dim,1))
-
         return
-
-    def sigmoid(self,x):
-        return np.divide(1, 1+np.exp(-x))
 
     def generate_v_sample(self,h):
         '''
@@ -31,8 +31,8 @@ class RBM:
             - a has shape (v_dim,m)
             - W has shape (v_dim,h_dim)
         '''
-        assert(np.shape(h)[0] == self.h_dim)
-        v_probs = self.sigmoid(self.a + np.dot(self.W,h))
+        #assert(np.shape(h)[0] == self.h_dim)
+        v_probs = sigmoid(self.a + np.dot(self.W,h))
         assert(not np.sum(np.isnan(v_probs)))
         return np.random.binomial(1,v_probs)
 
@@ -43,8 +43,8 @@ class RBM:
             - b has shape (h_dim,m)
             - W has shape (v_dim,h_dim)
         '''
-        assert(np.shape(v)[0] == self.v_dim)
-        h_probs = self.sigmoid(self.b + np.dot(np.transpose(self.W),v))
+        #assert(np.shape(v)[0] == self.v_dim)
+        h_probs = sigmoid(self.b + np.dot(np.transpose(self.W),v))
         assert(not np.sum(np.isnan(h_probs)))
         return np.random.binomial(1,h_probs) # when n=1, binomial = bernoulli
 
@@ -58,7 +58,7 @@ class RBM:
             - W has shape (v_dim,h_dim)
         '''
 
-        assert(np.shape(v)[0] == self.v_dim)
+        #assert(np.shape(v)[0] == self.v_dim)
         # sample distributions
         h       = self.generate_h_sample(v)
         v_prime = self.generate_v_sample(h)
@@ -76,16 +76,17 @@ class RBM:
         
         return
 
-    def train(self, x, epochs = 10, batch_size = 16, learning_rate = learning_rate):
+    def train(self, x, epochs = 10, batch_size = 16, learning_rate = learning_rate, plot = False):
         ''' 
             Input:
             - x has shape (v_dim, number_of_examples)
 
         '''
-        assert(np.shape(x)[0]==self.v_dim)
+        #assert(np.shape(x)[0]==self.v_dim)
         # initialize weights and parameters
         self.W = np.random.normal(0.,0.01,size = (self.v_dim,self.h_dim))
-        self.a = np.zeros((self.v_dim,1))
+        # visible bias a_i is initialized to ln(p_i/(1-p_i)), p_i = (proportion of examples where x_i = 1)
+        self.a = (np.log(np.mean(x,axis = 1,keepdims=True)+1e-10) - np.log(1-np.mean(x,axis = 1,keepdims=True)+1e-10)) 
         self.b = np.zeros((self.h_dim,1))
         
         num_minibatches = int(np.shape(x)[0]/batch_size)
@@ -97,16 +98,20 @@ class RBM:
             for j in range(num_minibatches):
                 v = x[:,i:i+batch_size]
                 self.gradient_update(v,learning_rate)
+
+            if plot == True:
+                self.plot_weights()
             
         
         return
 
-    def gibbs_sampling(self, n, m=1):
+    def gibbs_sampling(self, n=1, m=1):
         '''
             n - number of iterations of blocked Gibbs sampling
         '''
         v_probs = np.full((self.v_dim,m),0.5)
         v = np.random.binomial(1,v_probs)
+        #print(np.shape(v))
         
         h = self.generate_h_sample(v)
         
@@ -115,6 +120,25 @@ class RBM:
             h = self.generate_h_sample(v)
         
         return v,h
+
+    def plot_weights(self):
+        plt.figure(1)
+
+        plt.subplot(311)
+        plt.title('Weights')
+        plt.hist(self.W.flatten(),bins='auto')
+        
+        plt.subplot(312)
+        plt.title('Visible biases')
+        plt.hist(self.a.flatten(),bins='auto')
+        
+        plt.subplot(313)
+        plt.title('Hidden biases')
+        plt.hist(self.b.flatten(),bins='auto')
+
+        plt.tight_layout()
+
+        plt.show()
 
 
 

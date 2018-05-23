@@ -1,12 +1,11 @@
 # Autoencoder class
 '''
-    A class defining an autoencoder DFF neural network.
+    A class defining a deep autoencoder.
 
-    The layers can be pretrained with deep boltzmann machines.
+    The encoder and decoder are deep belief networks.
 
-    After pre-training, the model is unrolled into a deep autoencoder.
-
-    The model can then be tuned using minibatch gradient descent.
+    After pre-training, the model is unrolled into a keras model that
+    can then be tuned with minibatch gradient descent.
 
     After training, one can compute encodings using the encode function.
 
@@ -24,22 +23,20 @@ class Autoencoder:
 
     kind = 'Autoencoder'
 
-    def __init__(self,v_dim,latent_dim,num_hidden_layers):
+    def __init__(self,layer_dims):
         '''
             Inputs:
 
-            - v_dim      = dimension of the visible units (input data)
-            - latent_dim = dimension of the encoded layer
-            - num_hidden_layers = number of hidden layers in the encoder. 
+            - layer_dims = A list of the layer sizes, visible first, latent last
 
-            Note that the number of hidden layers in the autoencoder when training
-            will be twice num_hidden_layers. 
+            Note that the number of hidden layers in the unrolled autoencoder 
+            will be twice the length of layer_dims. 
         '''
 
-        self.latent_dim = latent_dim
-        self.v_dim = v_dim
-        self.num_hidden_layers = num_hidden_layers
-        self.layer_dims = np.linspace(self.v_dim,self.latent_dim, num = self.num_hidden_layers+1).astype(int)
+        self.latent_dim = layer_dims[-1]
+        self.v_dim      = layer_dims[0]
+        self.num_hidden_layers = len(layer_dims)-1
+        self.layer_dims = layer_dims
 
         print("Layer dimensions:")
         for i in range(self.num_hidden_layers+1):
@@ -56,7 +53,7 @@ class Autoencoder:
 
         return
 
-    def pretrain(self,x,epochs,num_samples = 2):
+    def pretrain(self,x,epochs,num_samples = 50000):
         '''
             Greedy layer-wise training
 
