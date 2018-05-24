@@ -24,11 +24,31 @@ class RBM:
         self.b = np.zeros((self.h_dim,1))
         return
 
+    @classmethod
+    def from_Values(cls,weights):
+        '''
+            Initialize with trained weights.
+        '''
+        W,a,b = weights['W'],weights['a'],weights['b']
+        assert (np.shape(W)[0] == np.shape(a)[0]) and (np.shape(W)[1] == np.shape(b)[0])
+        rbm = cls(np.shape(W)[0],np.shape(W)[1])
+        rbm.W = W
+        rbm.a = a
+        rbm.b = b
+        return rbm
+
+    @classmethod
+    def from_File(cls,filename):
+        '''
+            Initialize with weights loaded from a file.
+        '''
+        return cls.from_Values(RBM.load_weights(filename))
+
     def generate_v_sample(self,h):
         '''
             Input:
             - h has shape (h_dim,m)
-            - a has shape (v_dim,m)
+            - a has shape (v_dim,1)
             - W has shape (v_dim,h_dim)
         '''
         #assert(np.shape(h)[0] == self.h_dim)
@@ -40,7 +60,7 @@ class RBM:
         '''
             Input:
             - v has shape (v_dim,m)
-            - b has shape (h_dim,m)
+            - b has shape (h_dim,1)
             - W has shape (v_dim,h_dim)
         '''
         #assert(np.shape(v)[0] == self.v_dim)
@@ -53,8 +73,8 @@ class RBM:
             Input:
             - v has shape (v_dim,m)
             - h has shape (h_dim,m)
-            - a has shape (v_dim,m)
-            - b has shape (h_dim,m)
+            - a has shape (v_dim,1)
+            - b has shape (h_dim,1)
             - W has shape (v_dim,h_dim)
         '''
 
@@ -122,6 +142,9 @@ class RBM:
         return v,h
 
     def plot_weights(self):
+        '''
+            For debugging 
+        '''
         plt.figure(1)
 
         plt.subplot(311)
@@ -140,5 +163,32 @@ class RBM:
 
         plt.show()
 
+    def save(self, filename):
+        '''
+            Save trained weights of self to file
+        '''
+        weights = {"W":self.W,"a":self.a,"b":self.b}
+        RBM.save_weights(weights,filename)
+        return
+
+    @staticmethod
+    def save_weights(weights,filename):
+        '''
+            Save RBM weights to file
+        '''
+        np.savetxt(filename + '_a.csv',weights['a'],delimiter=",")
+        np.savetxt(filename + '_b.csv',weights['b'],delimiter=",")
+        np.savetxt(filename + '_W.csv',weights['W'],delimiter=",")
+        return
+
+    @staticmethod
+    def load_weights(filename):
+        '''
+            Save RBM weights to file
+        '''
+        W = np.loadtxt(filename + '_W.csv',delimiter=",")
+        a = np.loadtxt(filename + '_a.csv',delimiter=",").reshape((np.shape(W)[0],1))
+        b = np.loadtxt(filename + '_b.csv',delimiter=",").reshape((np.shape(W)[1],1))
+        return {"W":W,"a":a,"b":b}
 
 

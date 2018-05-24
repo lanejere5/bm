@@ -11,6 +11,8 @@
 
 '''
 import numpy as np
+import pandas as pd
+import os.path
 from RBM import *
 
 from keras.layers import Input, Dense
@@ -46,12 +48,36 @@ class Autoencoder:
         self.b = []
         self.a = []
         self.pretrained = False
-
         self.autoencoder = None
         self.encoder = None
         self.decoder = None
-
         return
+
+    @classmethod
+    def pretrained_from_file(cls,filename):
+        '''
+            Loads pretrained weights from a file.
+        '''
+        i = 0
+        weights = []
+        layer_dims = []
+
+        while os.path.isfile(filename+"_"+str(i)+"_a.csv"): # load the next layer's weights
+            weights.append(RBM.load_weights(filename+"_"+str(i))) # load the next dict of weights
+            layer_dims.append(np.shape(weights[i]['W'])[0])
+            i = i+1
+        layer_dims.append(np.shape(weights[i-1]['W'])[1])
+
+        rbm = cls(layer_dims)
+
+        for i in range(rbm.num_hidden_layers): 
+            rbm.W.append(weights[i]['W'])
+            rbm.a.append(weights[i]['a'])
+            rbm.b.append(weights[i]['b'])
+        
+        rbm.pretrained = True
+
+        return rbm
 
     def pretrain(self,x,epochs,num_samples = 50000):
         '''
@@ -59,14 +85,13 @@ class Autoencoder:
 
             shape(x) = (v_dim, number_of_examples)
         '''
-
         RBM_layers = []
 
         for i in range(self.num_hidden_layers): # initialize RBM's
             RBM_layers.append(RBM(self.layer_dims[i],self.layer_dims[i+1]))
         
         for i in range(self.num_hidden_layers):  # train RBM's 
-            print("Training layer %i"%(i+1))
+            print("Training RBM layer %i"%(i+1))
 
             RBM_layers[i].train(x,epochs) # train the ith RBM
             
@@ -102,13 +127,14 @@ class Autoencoder:
 
         # build decoder
         for i in range(self.num_hidden_layers):
-            weights = [self.W[self.num_hidden_layers-i-1].T,self.a[self.num_hidden_layers-i-1].flatten().T]
+            weights = [self.W[self.num_hidden_layers-i-1].T,self.a[self.num_hidden_layers-i-1].flatten()]
             x = Dense(self.layer_dims[self.num_hidden_layers-i-1], activation='sigmoid', weights = weights)(x)
 
         model = Model(inputs,x)
 
         self.autoencoder = model
 
+        self.autoencoder.compile(optimizer = 'rmsprop', loss = 'mse')
 
         return
 
@@ -116,8 +142,10 @@ class Autoencoder:
     def train(self,x,epochs,learning_rate = 0.001,batch_size = 16):
         '''
             Fine-tune the autoencoder with minibatch gradient descent
+
+            shape(x) = (v_dim, number_of_examples)
         '''
-        self.autoencoder.compile(optimizer = 'rmsprop', loss = 'categorical_crossentropy')
+        
         self.autoencoder.fit(x.T, x.T, epochs = epochs, batch_size=batch_size)
 
         return
@@ -132,7 +160,16 @@ class Autoencoder:
 
         return
 
+    def save(self,filename):
+        '''
+            saves the pretrained weights. Saving and loading a keras model 
+            after pretraining is better done directly to the self.autoencoder
+            object using the keras fnctions save() and load_model()
+        '''
 
-
-
-
+        if self.pretrained == True:
+            for i in range(self.num_hidden_layers):
+                weights = {"W":self.W[i],'a':self.a[i],'b':self.b[i]}
+                RBM.save_weights(weights,filename+"_"+str(i))
+        else: 
+            print("No pretrained weights to save.")
