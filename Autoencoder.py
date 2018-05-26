@@ -2,7 +2,7 @@
 '''
     A class defining a deep autoencoder.
 
-    The encoder and decoder are deep belief networks.
+    The encoder/decoder is a deep belief network.
 
     After pre-training, the model is unrolled into a keras model that
     can then be tuned with minibatch gradient descent.
@@ -56,7 +56,9 @@ class Autoencoder:
     @classmethod
     def pretrained_from_file(cls,filename):
         '''
-            Loads pretrained weights from a file.
+            Initialize with pretrained weights from a file.
+
+            Still needs to be unrolled.
         '''
         i = 0
         weights = []
@@ -173,3 +175,5 @@ class Autoencoder:
                 RBM.save_weights(weights,filename+"_"+str(i))
         else: 
             print("No pretrained weights to save.")
+
+        return

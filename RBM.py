@@ -2,8 +2,6 @@
 '''
     A class defining a restricted Boltzmann machine.
 
-
-
 '''
 import numpy as np
 import random
@@ -11,7 +9,7 @@ import matplotlib.pyplot as plt
 
 learning_rate = 0.01
 
-def sigmoid(x): # overflow protected sigmoid
+def sigmoid(x): 
     return 1/(1+np.exp(-x))
 
 class RBM:
@@ -74,10 +72,12 @@ class RBM:
         assert(not np.sum(np.isnan(h_probs)))
         return np.random.binomial(1,h_probs)
 
-    def train(self, x, epochs = 10, batch_size = 20, learning_rate = learning_rate, plot = False):
+    def train(self, x, epochs = 10, batch_size = 20, learning_rate = learning_rate, plot = False, initialize_weights = True):
         ''' 
             Input:
             - x has shape (v_dim, number_of_examples)
+            - if plot = True then RBM plots debugging related plots after every epoch
+            - use initialize_weights = False if you are continuing to train a model (e.g loaded from earlier trained weights)
 
         '''
         assert(x.shape[0]==self.v_dim)
@@ -94,14 +94,12 @@ class RBM:
         Da = np.zeros((self.v_dim,1))
         Db = np.zeros((self.h_dim,1))
 
-        # initialize weights and parameters
-        self.W = np.random.normal(0.,0.1,size = (self.v_dim,self.h_dim))
-        # visible bias a_i is initialized to ln(p_i/(1-p_i)), p_i = (proportion of examples where x_i = 1)
-        #self.a = (np.log(np.mean(x,axis = 1,keepdims=True)+1e-10) - np.log(1-np.mean(x,axis = 1,keepdims=True)+1e-10))
-        self.a = np.zeros((self.v_dim,1))
-        self.b = np.zeros((self.h_dim,1))
-
-        #print(self.W[0,0],self.a[0,0],self.b[0,0])
+        if initialize_weights == True: # initialize weights and parameters
+            self.W = np.random.normal(0.,0.1,size = (self.v_dim,self.h_dim))
+            # visible bias a_i is initialized to ln(p_i/(1-p_i)), p_i = (proportion of examples where x_i = 1)
+            #self.a = (np.log(np.mean(x,axis = 1,keepdims=True)+1e-10) - np.log(1-np.mean(x,axis = 1,keepdims=True)+1e-10))
+            self.a = np.zeros((self.v_dim,1))
+            self.b = np.zeros((self.h_dim,1))
 
         for i in range(epochs):
             print("Epoch %i"%(i+1))
