@@ -28,16 +28,11 @@ This class implements the pretraining of an autoencoder. It can be used as follo
     autoencoder.save("pretrained_weights")
 
     # unroll the RBM layers into an autoencoder (a Keras model)
-    autoencoder.unroll()
+    model = autoencoder.unroll()
 
-    # from here you can either take the Keras model and fine-tune it yourself
-    model = autoencoder.autoencoder
+    # from here you can take the Keras model and fine-tune it as you wish
+    model.compile(optimizer = 'rmsprop', loss = 'mse')
+    model.fit(x.T,x.T,epochs = 20, batch_size=10)
     model.save("file.h5")
-
-    # or you can fine-tune the model using the train() method (which just wraps the 
-    # Keras fit() method
-    autoencoder.train(x,epochs=20,learning_rate = 0.001,batch_size = 10)
-
-
 
     

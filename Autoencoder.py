@@ -48,9 +48,6 @@ class Autoencoder:
         self.b = []
         self.a = []
         self.pretrained = False
-        self.autoencoder = None
-        self.encoder = None
-        self.decoder = None
         return
 
     @classmethod
@@ -113,6 +110,8 @@ class Autoencoder:
         '''
             Unrolls the pretrained RBM network into a DFF keras model 
             and sets hidden layer parameters to pretrained values.
+
+            Returns the keras model
         '''
         if self.pretrained == False:
             print("Model not pretrained.")
@@ -132,35 +131,7 @@ class Autoencoder:
             weights = [self.W[self.num_hidden_layers-i-1].T,self.a[self.num_hidden_layers-i-1].flatten()]
             x = Dense(self.layer_dims[self.num_hidden_layers-i-1], activation='sigmoid', weights = weights)(x)
 
-        model = Model(inputs,x)
-
-        self.autoencoder = model
-
-        self.autoencoder.compile(optimizer = 'rmsprop', loss = 'mse')
-
-        return
-
-
-    def train(self,x,epochs,learning_rate = 0.001,batch_size = 16):
-        '''
-            Fine-tune the autoencoder with minibatch gradient descent
-
-            shape(x) = (v_dim, number_of_examples)
-        '''
-        
-        self.autoencoder.fit(x.T, x.T, epochs = epochs, batch_size=batch_size)
-
-        return
-
-    def encode(self):
-        # 
-
-        return
-
-    def generate(self):
-        # generate examples from the latent space
-
-        return
+        return Model(inputs,x)
 
     def save(self,filename):
         '''
