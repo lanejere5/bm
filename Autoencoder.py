@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import os.path
 from RBM import *
+from RBM_with_linear_hidden_units import *
 
 from keras.layers import Input, Dense
 from keras.models import Model
@@ -81,13 +82,18 @@ class Autoencoder:
     def pretrain(self,x,epochs,num_samples = 50000):
         '''
             Greedy layer-wise training
+            
+            The last layer is a RBM with linear hidden units
 
             shape(x) = (v_dim, number_of_examples)
         '''
         RBM_layers = []
 
         for i in range(self.num_hidden_layers): # initialize RBM's
-            RBM_layers.append(RBM(self.layer_dims[i],self.layer_dims[i+1]))
+            if (i < self.num_hidden_layers - 1):
+                RBM_layers.append(RBM(self.layer_dims[i],self.layer_dims[i+1]))
+            else:
+                RBM_layers.append(RBM_with_linear_hidden_units(self.layer_dims[i],self.layer_dims[i+1]))
         
         for i in range(self.num_hidden_layers):  # train RBM's 
             print("Training RBM layer %i"%(i+1))
