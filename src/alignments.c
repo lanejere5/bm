@@ -1,5 +1,6 @@
 #include<stdio.h>
 #include<stdlib.h>
+#include<immintrin.h>
 #include<stdint.h>
 
 int main(void) {
@@ -27,6 +28,8 @@ int main(void) {
     printf("double *: %lu\n", __alignof__(double *));
     printf("long double *: %lu\n", __alignof__(long double *));
     printf("float **: %lu\n", __alignof__(float **));
+    printf("float8 *: %lu\n", __alignof__(__m256 *));
+    printf("float8: %lu\n", __alignof__(__m256));
     printf("Here are the sizes of various data types on your architecture: \n");
     printf("char: %lu\n", sizeof(char));
     printf("uchar: %lu\n", sizeof(unsigned char));

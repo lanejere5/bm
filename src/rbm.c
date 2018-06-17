@@ -30,17 +30,25 @@ This script provides utilities for training a restricted Boltzmann machine.  It 
 
 typedef struct RBM {
     uint32_t v_dim, h_dim; // 8 bytes
-    float** W; // Some bytes - 8 byte aligned
+    uint32_t r, c; // 8 bytes. Smallest multiples of 8 greater than v_dim and h_dim
+    float8** W; // Store the rows of W
+    float8** WT; // Also store the columns of W
 };
 
+//FIXME: Update for addition of WT
 RBM* init_rbm(unsigned int v, unsigned int h) {
     
     RBM* out = (RBM *) malloc( sizeof(RBM) );
     out->v_dim = v;
     out->h_dim = h;
-    // The weights of the RBM are stored as a dynamically allocated set of rows
-    if(out->W = malloc( h * sizeof(float *) ) == NULL) return NULL;
+    out->r = 8 * (v / 8) + 8;
+    out->c = 8 * (h / 8) + 8;
 
+    // The weights of the RBM are stored as a dynamically allocated set of rows
+    if(out->W = malloc( (1 + v/8) * sizeof(float8 *) ) == NULL) exit(-1);
+    if(out->WT = malloc( (1 + h/8) * sizeof(float8 *) ) == NULL) exit(-1);
+    // Initialize all our rows/columns to zero
+    
     for (int i = 0; i < h; i++) {
         // Allocate memory for each row
         if(out->W[i] = (float *) malloc( v * sizeof(float) )) return NULL;
@@ -52,12 +60,18 @@ RBM* init_rbm(unsigned int v, unsigned int h) {
 void destroy_rbm(RBM* r) {
     // Free the memory being used to store each row 
     for (int i = 0; i < r->h_dim; i++) {
-        free(out->W[i]);
-        out->W[i] = NULL;
+        free(r->W[i]);
+        r->W[i] = NULL;
+    }
+    for (int i = 0; i < r->h_dim; i++) {
+        free(r->WT[i]);
+        r->WT[i] = NULL;
     }
     // Free the memory being used to store pointers to the rows
-    free(out->W);
-    out->W = NULL;
+    free(r->W);
+    r->W = NULL;
+    free(r->WT);
+    r->WT = NULL;
     // Finally free the memory being used to store the RBM
     free(r);
 }
@@ -69,26 +83,44 @@ void destroy_rbm(RBM* r) {
 /*************************************************************/
 
 // Helper struct for distributed heap allocated memory to multiple threads without having to create a lot of copies
-typedef struct Av {
+typedef struct Av_add_b {
     // This packs nicely into a 32-byte struct
-    float** A;       // 8 bytes
-    float* v;       // 8 bytes
-    float* result;  // 8 bytes
-    uint32_t l;
+    float8** A;      // 8 bytes
+    float8* v;       // 8 bytes
+    float8* b;       // 8 bytes
+    float8* result;  // 8 bytes
+    uint32_t l;     // 4 bytes
 };
 
 typedef struct ThreadArgs {
-    Av* data;
+    Av_add_b* data;
     uint32_t threadID;
 };
 
+void multiply_block(float8* rows, float8 col, float8* out) {
+     float temp[8];
+     temp[0] = _mm256_mul_ps(rows[0],col);
+}
+// Block 11 * y1 + Block12 * y2 + ...
+/*  This picture is helping me understand right now. I'm tired.
+
+* * * *  *
+* * * *  *
+* * * *  *
+* * * *  *
+
+*/
+
+
 // This is the function that dispatches work to all the threads.  The k'th thread will be assigned all the rows j such that floor( j / MAX_THREADS ) = k
-void A_x(Av* data) {
+void affine(Av_add_b* data) {
 
     // Initialize an array of threads and the arguments that will be passed to them
     pthread_t threads[MAX_THREADS];
     ThreadArgs args[MAX_THREADS];
     
+    data->result = data->b;
+
     for (int i = 0; i < MAX_THREADS; i++) {
         args[i].data = data;
         args[i].threadID = i;
@@ -96,10 +128,12 @@ void A_x(Av* data) {
                             NULL, 
                             dot, 
                             &args[i])) {
+            // Eject with error code if one of the threads fails to create 
             printf("ERROR; return code from pthread_create() is %d\n", rc);
             exit(-1);
         }
     }
+        
 
 }
 
@@ -109,31 +143,31 @@ void A_x(Av* data) {
 void* dot(void* args) {
     
     ThreadArgs* argv = (ThreadArgs *) args;
-    // 7 rows, 4 threads -> 7/4 + 1 = 2
-    // Thread 0: 0,1
-    // Thread 1: 2,3
-    // Thread 2: 4,5
-    // Thread 3: 6
+    // These choices distribute rows evenly over all threads 
     uint32_t first_row = args->threadID * (1 + MAX_ROWS / MAX_THREADS);
     uint32_t row = first_row; 
-
+    
+    // Pull some pointers out of Av* to make code more readable
     float* y = argv->data->v;
-
+    uint32_t l = argv->data->l;
+    
     while ( (row < MAX_ROWS) && (row / MAX_THREADS == first_row) ) {
 
         float8 x8, y8, prod, sum;
 
+        // This is the row of the matrix we're currently working with
         float* x = argv->data->A[row];
 
-        for(int i = 0; i < l; i++) {
+        // Go through the elements 8 at a time
+        for(int i = 0; i < l; i += 8) {
             // Load 8 values 
             x8 = _mm256_load_ps(x + i);
             y8 = _mm256_load_ps(y + i);
             // Take the product of those values
             prod = _mm256_mul_ps(x8,y8);
             // Horizontal sum
-            
-            argv->data->result[row] += _mm256_cvtss_f32 (__m256 a)
+            sum = _mm256_hadd_ps(prod, _mm256 
+            argv->data->result[row] += _mm256_cvtss_f32(sum);
 
         }
         
