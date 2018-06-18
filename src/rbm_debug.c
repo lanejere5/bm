@@ -5,6 +5,7 @@ This script provides utilities for training a restricted Boltzmann machine.  It 
 */
 
 #include<pthread.h>
+#include<string.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<stdint.h>
@@ -87,20 +88,22 @@ void destroy_rbm(RBM* r) {
 
 /*
 
-Here is the basic idea I'm going for.  First, the function multiply_block uses AVX2 functions to quickly compute the matrix-vector multiplication of an 8x8 on an 8 component vector.  So, we store a general (m x n)-matrix as the upper left submatrix of a larger matrix tiled using 8x8 blocks, padding the remaining elements with zeros.  The horizontal strips of 8x8 blocks are stored as a dynamically allocated array of "Blocks".  When we want to compute a general matrix-vector product, we traverse the list for each strip, multiplying the relevant 8x8 blocks against the appropriate entries in the vector.  
+Here is what I'm going to try: keeping strips of 8 rows at a time.  
 
-To speed up execution of matrix multiplication, we spawn many threads to handle processing of all the strips
+->    ->    ->    ****
+            ->    ****
+            ->    ****
+            ->    ****
 
+      ->    ->    ****
+            ->    ****
+            ->    ****
+            ->    ****
 */
-
-// Store strips of 8x8 blocks as a linked list
-typedef struct Block {
-    float8 row[8]; // Rows of the block
-} Block;
 
 // Helper struct for distributed heap allocated memory to multiple threads without having to create a lot of copies
 typedef struct LinearMapData {
-    Block** A;                // 8 bytes The matrix, partitioned strips, each containing 8x8 blocks
+    float8*** A;              // 8 bytes The matrix, partitioned into 8 row strips
     float8* v;                // 8 bytes The vector to multiply
     float8* result;           // 8 bytes Place to store the answer
     uint32_t num_rows;        // 4 bytes Number of 8-float chunks in v
@@ -109,19 +112,16 @@ typedef struct LinearMapData {
     uint32_t num_col_blocks;  // 4 bytes Number of 8-float chunks in v
 } LinearMapData;
 
+// Create/destroy functions defined below main
+LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols);
+void destroyLinearMap(LinearMapData* data);
+
+
 // Helper struct for passing multiple arguments to a threaded function
 typedef struct ThreadArgs {
     LinearMapData* data;
     uint32_t threadID;
 } ThreadArgs;
-
-// Create/destroy functions defined below main
-LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols);
-void destroyLinearMap(LinearMapData* data);
-
-static inline float8 shuffle(void) {
-    return _mm256_set_epi32(7,3,6,2,5,1,4,0);
-}
 
 void multiply_block(float8* rows, float8* col, float8* out) {
     /*  This picture is helping me understand right now. I'm tired.
@@ -158,12 +158,14 @@ void multiply_block(float8* rows, float8* col, float8* out) {
 
     */
      
+    float8 buf[8];
+
     // x1234 y1234 a1234 b1234 x5678 y5678 a5678 b5678
     //   0     4     1     5     2     6     3     7 
-    // This permutation is implemented in static inline shuffle()
+    // Implement the permutation above
+    const float8 shuffle = _mm256_set_epi32(7,3,6,2,5,1,4,0);
 
     // Multiply rows of A against the column vector
-    /*
     buf[0] = _mm256_mul_ps(rows[0],*col);
     buf[1] = _mm256_mul_ps(rows[1],*col);
     buf[2] = _mm256_mul_ps(rows[2],*col);
@@ -172,12 +174,11 @@ void multiply_block(float8* rows, float8* col, float8* out) {
     buf[5] = _mm256_mul_ps(rows[5],*col);
     buf[6] = _mm256_mul_ps(rows[6],*col);
     buf[7] = _mm256_mul_ps(rows[7],*col);
-*/
+
     *out = _mm256_add_ps(*out, _mm256_hadd_ps(
-                                    _mm256_permutevar8x32_ps(_mm256_hadd_ps(_mm256_hadd_ps(_mm256_mul_ps(rows[0],*col),_mm256_mul_ps(rows[1],*col)), _mm256_hadd_ps(_mm256_mul_ps(rows[4],*col),_mm256_mul_ps(rows[5],*col))), shuffle()),
-                                    _mm256_permutevar8x32_ps(_mm256_hadd_ps(_mm256_hadd_ps(_mm256_mul_ps(rows[2],*col),_mm256_mul_ps(rows[3],*col)), _mm256_hadd_ps(_mm256_mul_ps(rows[6],*col),_mm256_mul_ps(rows[7],*col))), shuffle())
+                                    _mm256_permutevar8x32_ps(_mm256_hadd_ps(_mm256_hadd_ps(buf[0],buf[1]), _mm256_hadd_ps(buf[4],buf[5])), shuffle),
+                                    _mm256_permutevar8x32_ps(_mm256_hadd_ps(_mm256_hadd_ps(buf[2],buf[3]), _mm256_hadd_ps(buf[6],buf[7])), shuffle)
                                 ));
-    return;
 }
 
 /*
@@ -195,8 +196,9 @@ void affineMap(LinearMapData* data, float8* bias);
 void* dot(void* args) {
     
     ThreadArgs* arg = (ThreadArgs *) args;
+    float8 buf[8];
 
-    Block** A = arg->data->A;
+    float8*** A = arg->data->A;
     
     // Allocate strips to this thread
     int strips_per_thread = arg->data->num_row_blocks / MAX_THREADS + 1, strip;
@@ -212,8 +214,20 @@ void* dot(void* args) {
         }
         
         // Otherwise, for each block of columns, multiply the block and store the result.
-        for (int i = 0; i < arg->data->num_col_blocks; i++) multiply_block(A[strip][i].row, &arg->data->v[strip], &arg->data->result[strip]);
+        for (int i = 0; i < arg->data->num_col_blocks; i++) {
 
+            buf[0] = A[strip][0][i];
+            buf[1] = A[strip][1][i];
+            buf[2] = A[strip][2][i];
+            buf[3] = A[strip][3][i];
+            buf[4] = A[strip][4][i];
+            buf[5] = A[strip][5][i];
+            buf[6] = A[strip][6][i];
+            buf[7] = A[strip][7][i];
+            
+            multiply_block(buf, &arg->data->v[strip], &arg->data->result[strip]);
+
+        }
     }
     // After processing all strips, end the thread.
     // pthread_exit(NULL);
@@ -282,34 +296,9 @@ float* sigmoid(float* x, unsigned int N) {
 }
 
 int main(void) {
-
-    // Initialize a vector of ones for sigmoid test
-    // float __attribute__ (( aligned(32) )) ones[2048] = {[0 ... 2047] = 1.0};
-    
     LinearMapData* data = createLinearMap(16,1000);
-    
-    // Let's try this with a threadargs
-    ThreadArgs* arg = malloc(sizeof(ThreadArgs));
-    arg->data = data;
-    arg->threadID = 0;
-    
-//    for (int i = 0; i < NUM_TRIALS; i++) {
- //   }
 
-    struct timespec tstart={0,0}, tend={0,0};
-    clock_gettime(CLOCK_MONOTONIC, &tstart);
-    for (int i = 0; i < NUM_TRIALS; i++)  dot(arg);
-    clock_gettime(CLOCK_MONOTONIC, &tend);
-    printf("some_long_computation took about %lu nanoseconds\n",
-           (tend.tv_nsec - tstart.tv_nsec)/NUM_TRIALS);
-    
-    float* res2 = (float *) data->result;
-    printf("%f %f %f %f %f %f %f %f \n", res2[0],res2[1],res2[2],res2[3],res2[4], res2[5], res2[6], res2[7]);
-    //printf("%lu nanoseconds\n", ( (NANOSECONDS_PER_SECOND / 1) * (end - start) / (CLOCKS_PER_SEC) ));
-    // (clocks) * (ns / s) / (clocks / s) = ns
-    free(arg);
     destroyLinearMap(data);
-//    _mm_free(res);
     return 0;
 }
 
@@ -332,30 +321,35 @@ LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols) {
     data->num_col_blocks = ( num_cols % 8 ) ? num_cols/8 + 1 : num_cols / 8;
     
     // Initialize the column vector v and set it to zero.
-    data->v = _mm_malloc(data->num_col_blocks * sizeof(float8), AVX2_BYTE_ALIGNMENT);
-    for (int i = 0; i < data->num_col_blocks; i++) data->v[i] = _mm256_set1_ps(0.0); 
-    
+    data->v = _mm_malloc(data->num_col_blocks * sizeof(float8 *), AVX2_BYTE_ALIGNMENT);
+    memset(data->v, 0, data->num_col_blocks * sizeof(float8 *));
+   
     // Initialize the output vector result = Av and set to zero
-    data->result = _mm_malloc(data->num_row_blocks * sizeof(float8), AVX2_BYTE_ALIGNMENT);
-    for (int i = 0; i < data->num_row_blocks; i++) data->result[i] = _mm256_set1_ps(0.0); 
-    
-    data->A = malloc(data->num_row_blocks * sizeof(Block *));
+    data->result = _mm_malloc(data->num_row_blocks * sizeof(float8 *), AVX2_BYTE_ALIGNMENT);
+    memset(data->result, 0, data->num_row_blocks * sizeof(float8 *));
+   
+    data->A = malloc(data->num_row_blocks * sizeof(float8 **)); /*
     for (int i = 0; i < data->num_row_blocks; i++) {
-        data->A[i] = malloc(data->num_col_blocks * sizeof(Block) );
-        for (int j = 0; j < data->num_col_blocks; j++ ) {
-            for (int k = 0; k < 8; k++) data->A[i][j].row[k] = _mm256_set1_ps(0.0);
+        data->A[i] = malloc(8 * sizeof(float8 *));
+        for (int j = 0; j < 8; j++) {
+            data->A[i][j] = (float8 *) _mm_malloc(data->num_col_blocks * sizeof(float8), AVX2_BYTE_ALIGNMENT);
+            for (int k = 0; k < data->num_col_blocks; k++) { 
+                data->A[i][j][k] = _mm256_set1_ps(0.0);
+            }
         }
     }
-
+    */
     return data;
 }
 
 void destroyLinearMap(LinearMapData* data) { 
+   /* 
     for (int i = 0; i < data->num_row_blocks; i++) {
+        for (int j = 0; j < 8; j++) _mm_free(data->A[i][j]);
         free(data->A[i]);
-    }
-    free(data->A);
-    _mm_free(data->result);
+    }*/
+    free(data->A); 
+    _mm_free(data->result); 
     _mm_free(data->v);
     free(data);
     data = NULL;
