@@ -3,7 +3,6 @@
 This script provides utilities for training a restricted Boltzmann machine.  It is the C analogue of the Python scripts in the repository root directory.  We intend to get speedup here using Intel Intrinsics AVX2 SIMD instructions, together with multithreaded processing.
 
 */
-
 #include<pthread.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -79,9 +78,76 @@ void destroy_rbm(RBM* r) {
     free(r);
 }
 */ 
+
 /*************************************************************/
 
-//  Utilities for matrix-vector multiplication using SIMD and multithreaded processing
+//  Task scheduler for multithreading matrix multiplication
+
+/*************************************************************/
+
+typedef (void *) ThreadPool;
+
+// Struct to store function executions in a linked list
+typedef struct work_t {
+    void (*task) (void *);
+    void* args;
+    work_t* next;
+} work_t;
+
+typedef struct _ThreadPool {
+    int num_threads;
+    int size;
+    int shutdown;
+    pthread_t* threads;
+    work_t* head;
+    work_t* tail;
+    pthread_mutex_t lock;
+    pthread_cond_t not_empty;
+} _ThreadPool;
+
+// This function runs inside the threads when they spawn.  It's an infinite loop that waits for tasks to get loaded into the queue.  When it sees a new task, it executes the work.
+void* getWork(ThreadPool p) {
+    
+    ThreadPool* pool = (ThreadPool *) p;
+    work_t* job;
+
+    while(1) { 
+        // Lock the ThreadPool so that no other threads can pull tasks off
+        pthread_mutex_lock( &(pool->lock) );
+
+        // If the task pool is empty, wait until it isn't empty anymore.  
+        while (pool->size == 0) {
+            // When the queue is empty, the threads will hold here and wait for dispatch() to signal not_empty
+            pthread_cond_wait( &(pool->not_empty), &(pool->lock) );
+            // If we get the shutdown signal, then end the thread.
+            if(pool->shutdown) { 
+                pthread_mutex_unlock( &(pool->lock) );
+                pthread_exit(NULL);
+            }
+        }
+
+        // Grab a job off the queue
+        job = pool->head;
+        pool->size--;
+        if (job->next != NULL) {
+            pool->head = job->next;
+        } // If this was the last job in the queue
+        else {
+            pool->head = NULL;
+            pool->tail = NULL;
+        }
+        // Now that we've grabbed a task, we can unlock the ThreadPool so that other threads can take a task.
+        pthread_mutex_unlock( &(pool->lock) );
+        // Do the work
+        (job->task)(job->args);
+        // Now that the work is done, free the job task.
+        free(job);
+    }
+}
+
+/*************************************************************/
+
+//  Utilities for matrix-vector multiplication using SIMD
 
 /*************************************************************/
 
@@ -108,12 +174,6 @@ typedef struct LinearMapData {
     uint32_t num_row_blocks;  // 4 bytes Number of 8-float chunks in v
     uint32_t num_col_blocks;  // 4 bytes Number of 8-float chunks in v
 } LinearMapData;
-
-// Helper struct for passing multiple arguments to a threaded function
-typedef struct ThreadArgs {
-    LinearMapData* data;
-    uint32_t threadID;
-} ThreadArgs;
 
 // Create/destroy functions defined below main
 LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols);
@@ -180,18 +240,9 @@ void multiply_block(float8* rows, float8* col, float8* out) {
     return;
 }
 
-/*
-
-We parallelize matrix-vector multiplication by using block_muliply to compute 8 values of the outupt vector in each thread - i.e. we break the matrix A up into 8 row strips, and assign each strip it's own thread.
-
-*/
-
-
 void affineMap(LinearMapData* data, float8* bias);
 
 // Thread concurrent AVX2 matrix-vector multiplication Ax.  
-// Both x and rows(A) must be 32-byte aligned and have the same length
-// (void *) will get cast to (ThreadArgs *)
 void* dot(void* args) {
     
     ThreadArgs* arg = (ThreadArgs *) args;
@@ -226,9 +277,10 @@ void linearMap(LinearMapData* data) {
     // Initialize an array of threads and the arguments that will be passed to them
     pthread_t threads[MAX_THREADS];
     ThreadArgs args[MAX_THREADS];
-    int rc;
+    int rc; 
+    int MAX_THREAD_SPAWN = (data->num_row_blocks < MAX_THREADS) ? data->num_row_blocks : MAX_THREADS;
 
-    for (int i = 0; i < MAX_THREADS; i++) {
+    for (int i = 0; i < MAX_THREAD_SPAWN; i++) {
         args[i].data = data;
         args[i].threadID = i;
         if( (rc = pthread_create(  &threads[i], 
@@ -288,26 +340,16 @@ int main(void) {
     
     LinearMapData* data = createLinearMap(16,1000);
     
-    // Let's try this with a threadargs
-    ThreadArgs* arg = malloc(sizeof(ThreadArgs));
-    arg->data = data;
-    arg->threadID = 0;
-    
-//    for (int i = 0; i < NUM_TRIALS; i++) {
- //   }
-
     struct timespec tstart={0,0}, tend={0,0};
     clock_gettime(CLOCK_MONOTONIC, &tstart);
-    for (int i = 0; i < NUM_TRIALS; i++)  dot(arg);
+    for (int i = 0; i < NUM_TRIALS; i++)  linearMap(data);
     clock_gettime(CLOCK_MONOTONIC, &tend);
-    printf("some_long_computation took about %lu nanoseconds\n",
+    printf("Matrix multiplication took about %lu nanoseconds\n",
            (tend.tv_nsec - tstart.tv_nsec)/NUM_TRIALS);
     
     float* res2 = (float *) data->result;
     printf("%f %f %f %f %f %f %f %f \n", res2[0],res2[1],res2[2],res2[3],res2[4], res2[5], res2[6], res2[7]);
-    //printf("%lu nanoseconds\n", ( (NANOSECONDS_PER_SECOND / 1) * (end - start) / (CLOCKS_PER_SEC) ));
-    // (clocks) * (ns / s) / (clocks / s) = ns
-    free(arg);
+    
     destroyLinearMap(data);
 //    _mm_free(res);
     return 0;
