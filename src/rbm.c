@@ -22,7 +22,7 @@ This script provides utilities for training a restricted Boltzmann machine.  It 
 #define ulong2 __m128i
 
 #define CACHE_SIZE 128
-#define MAX_THREADS 1024
+#define MAX_THREADS 128
 #define NANOSECONDS_PER_SECOND 1000000000
 #define AVX2_BYTE_ALIGNMENT 32
 #define NUM_TRIALS 1000
@@ -85,30 +85,35 @@ void destroy_rbm(RBM* r) {
 
 /*************************************************************/
 
-typedef (void *) ThreadPool;
+typedef void *ThreadPool;
+// Declares a type "Func" an instance of which is a pointer to a function f: (void *) -> void
+typedef void (*Func)(void *);
+typedef void *Args;
 
 // Struct to store function executions in a linked list
 typedef struct work_t {
     void (*task) (void *);
     void* args;
-    work_t* next;
+    struct work_t* next;
 } work_t;
 
 typedef struct _ThreadPool {
     int num_threads;
     int size;
     int shutdown;
+    int reject_new_work;
     pthread_t* threads;
     work_t* head;
     work_t* tail;
     pthread_mutex_t lock;
-    pthread_cond_t not_empty;
+    pthread_cond_t not_empty;  
+    pthread_cond_t empty;
 } _ThreadPool;
 
 // This function runs inside the threads when they spawn.  It's an infinite loop that waits for tasks to get loaded into the queue.  When it sees a new task, it executes the work.
 void* getWork(ThreadPool p) {
     
-    ThreadPool* pool = (ThreadPool *) p;
+    _ThreadPool* pool = (_ThreadPool *) p;
     work_t* job;
 
     while(1) { 
@@ -118,14 +123,13 @@ void* getWork(ThreadPool p) {
         // If the task pool is empty, wait until it isn't empty anymore.  
         while (pool->size == 0) {
             // When the queue is empty, the threads will hold here and wait for dispatch() to signal not_empty
-            pthread_cond_wait( &(pool->not_empty), &(pool->lock) );
+            pthread_cond_wait( &(pool->not_empty), &(pool->lock) ); // LINE (*)
             // If we get the shutdown signal, then end the thread.
             if(pool->shutdown) { 
                 pthread_mutex_unlock( &(pool->lock) );
                 pthread_exit(NULL);
             }
         }
-
         // Grab a job off the queue
         job = pool->head;
         pool->size--;
@@ -136,6 +140,11 @@ void* getWork(ThreadPool p) {
             pool->head = NULL;
             pool->tail = NULL;
         }
+         
+        if (pool->size == 0 && ! pool->shutdown) {
+            // There may or may not be a thread who has called deleteThreadPool and is waiting for a signal that the queue is empty.
+            pthread_cond_signal( &(pool->empty) );
+        }
         // Now that we've grabbed a task, we can unlock the ThreadPool so that other threads can take a task.
         pthread_mutex_unlock( &(pool->lock) );
         // Do the work
@@ -145,6 +154,111 @@ void* getWork(ThreadPool p) {
     }
 }
 
+void enqueueTask(ThreadPool p, Func f, Args args) {
+    _ThreadPool* pool = (_ThreadPool *) p; 
+    work_t* job; ;
+    if ((job = malloc( sizeof(work_t) )) == NULL) {
+        printf("Could not allocate memory for new job when enqueueing task.\n");
+        exit(-1);
+    }
+    // Initialize the job
+    job->task = f;
+    job->args = args;
+    job->next = NULL;
+    // Now add the job to the queue.  First make sure no other threads can grab jobs while you're adding a new one.
+    pthread_mutex_lock( &(pool->lock) );
+    // When we're shutting down, we want to make sure not to enqueue new tasks.
+    if (pool->reject_new_work) {
+        free(job);
+        pthread_mutex_unlock( &(pool->lock) );
+        return;
+    }
+    // If there are existing jobs in the pool, then add this one to the end.  Otherwise start a new list.
+    if (pool->size) {
+        pool->tail->next = job;
+        pool->tail = job;
+        pool->size++; 
+    }
+    else {
+        pool->head = job;
+        pool->tail = job;
+        pool->size++; 
+        // Signal to the waiting threads that there is a new job to be processed
+        pthread_cond_signal( &(pool->not_empty) );
+    }
+    // All done! Unlock the mutex.
+    pthread_mutex_unlock( &(pool->lock) );
+    return;
+}
+
+ThreadPool createThreadPool(int num_threads) {
+    _ThreadPool* pool;
+    if ((pool= malloc( sizeof(_ThreadPool) )) == NULL ) {
+        printf("Memory unavailable for call to malloc(pool)\n");
+        exit(-1);
+    }
+    
+    pool->size = 0;
+    pool->num_threads = (num_threads > MAX_THREADS) ? MAX_THREADS : num_threads;
+    pool->shutdown = 0;
+    pool->head = NULL;
+    pool->tail = NULL;
+
+    if ((pool->threads = malloc( pool->num_threads * sizeof(pthread_t) )) == NULL) {
+        printf("Memory unavailable for call to malloc(pthread_t)\n");
+        exit(-1);
+    }
+    if( pthread_mutex_init(&(pool->lock),NULL) ) {
+        printf("Error encountered when initializing pthread_mutex_t\n");
+        exit(-1);
+    }
+    if( pthread_cond_init(&(pool->not_empty),NULL) ) {
+        printf("Error encountered when initializing pthread_cond_t\n");	
+        exit(-1); 
+    } 
+
+    // Start up the threads
+    for (int i = 0; i < pool->num_threads; i++) {
+        if( pthread_create(&(pool->threads[i]), NULL, getWork, pool) ) {
+            // Eject with error code if one of the threads fails to create 
+            printf("Error encountered when spawning thread with pthread_create()\n");
+            exit(-1);
+        }
+    }
+
+    return (ThreadPool) pool;
+}
+
+void destroyThreadPool(ThreadPool p) {
+    _ThreadPool* pool = (_ThreadPool *) p;
+    
+    pthread_mutex_lock( &(pool->lock) );
+    pool->reject_new_work = 1;
+    while (pool->size != 0) {
+        // Wait here until we get the signal that the queue is empty and all tasks are complete.  The worker threads will be waiting at LINE (*)
+        pthread_cond_wait( &(pool->empty), &(pool->lock) );
+    }
+    // Give the shutdown signal
+    pool->shutdown = 1;
+    // Broadcast to the waiting threads that they may now pass LINE (*) 
+    pthread_cond_broadcast( &(pool->not_empty) );
+    pthread_mutex_unlock( &(pool->lock) );
+    for (int i = 0; i < pool->num_threads; i++) {
+        // There may have been threads waiting at the initial mutex of our getWork function, in which case, they will not have received the OK signal. 
+        pthread_cond_broadcast( &(pool->not_empty) );
+
+        // FIXME: Master thread can pass all pthread_cond_broadcasts before any of the worker threads have had a chance to hit the cond_wait.
+        pthread_join(pool->threads[i], NULL);
+    }
+    // All the parallel threads have been terminated.  Free the resources we malloc'd
+    free(pool->threads);
+    pthread_mutex_destroy(&(pool->lock));
+	pthread_cond_destroy(&(pool->empty));
+	pthread_cond_destroy(&(pool->not_empty));
+    free(pool);
+	return;
+
+}
 /*************************************************************/
 
 //  Utilities for matrix-vector multiplication using SIMD
@@ -242,6 +356,7 @@ void multiply_block(float8* rows, float8* col, float8* out) {
 
 void affineMap(LinearMapData* data, float8* bias);
 
+/*
 // Thread concurrent AVX2 matrix-vector multiplication Ax.  
 void* dot(void* args) {
     
@@ -283,17 +398,9 @@ void linearMap(LinearMapData* data) {
     for (int i = 0; i < MAX_THREAD_SPAWN; i++) {
         args[i].data = data;
         args[i].threadID = i;
-        if( (rc = pthread_create(  &threads[i], 
-                            NULL, 
-                            dot, 
-                            &args[i]))) {
-            // Eject with error code if one of the threads fails to create 
-            printf("ERROR; return code from pthread_create() is %d\n", rc);
-            exit(-1);
-        }
     }        
 }
-
+*/
 void delete_rbm(RBM* r) {
 
 }
@@ -337,7 +444,7 @@ int main(void) {
 
     // Initialize a vector of ones for sigmoid test
     // float __attribute__ (( aligned(32) )) ones[2048] = {[0 ... 2047] = 1.0};
-    
+    /*    
     LinearMapData* data = createLinearMap(16,1000);
     
     struct timespec tstart={0,0}, tend={0,0};
@@ -352,7 +459,16 @@ int main(void) {
     
     destroyLinearMap(data);
 //    _mm_free(res);
+    */
+
+    /* TESTING THREADPOOL IMPLEMENTATION */
+    int num_threads = 4; 
+    
+    ThreadPool p = createThreadPool(num_threads); 
+    destroyThreadPool(p);
+
     return 0;
+
 }
 
 
