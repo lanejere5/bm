@@ -263,8 +263,8 @@ void destroyThreadPool(ThreadPool p) {
 	pthread_cond_destroy(&(pool->not_empty));
     free(pool);
 	return;
-
 }
+
 /*************************************************************/
 
 //  Utilities for matrix-vector multiplication using SIMD
@@ -294,6 +294,12 @@ typedef struct LinearMapData {
     uint32_t num_row_blocks;  // 4 bytes Number of 8-float chunks in v
     uint32_t num_col_blocks;  // 4 bytes Number of 8-float chunks in v
 } LinearMapData;
+
+// This struct gets passed as an argument to the function "dot"
+typedef struct ThreadArg {
+    LinearMapData* data;
+    uint32_t strip;
+} ThreadArg;
 
 // Create/destroy functions defined below main
 LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols);
@@ -362,51 +368,29 @@ void multiply_block(float8* rows, float8* col, float8* out) {
 
 void affineMap(LinearMapData* data, float8* bias);
 
-/*
 // Thread concurrent AVX2 matrix-vector multiplication Ax.  
-void* dot(void* args) {
-    
-    ThreadArgs* arg = (ThreadArgs *) args;
+void dot(void* args) {
+    // args will secretly have type ThreadArg**
+    ThreadArg* arg = (ThreadArg *)args;
+    for (int j = 0; j < arg->data->num_col_blocks; j++) 
+        multiply_block( arg->data->A[arg->strip][j].row, &(arg->data->v[j]), &(arg->data->result[arg->strip]) );
+        // You can almost read the above as Av = result
+    return;
+}
 
-    Block** A = arg->data->A;
-    
-    // Allocate strips to this thread
-    int strips_per_thread = arg->data->num_row_blocks / MAX_THREADS + 1, strip;
-
-    for (int j = 0; j < strips_per_thread; j++) {
-       
-        // Figure out which strip of 8 rows we're currently processing
-        strip = strips_per_thread * arg->threadID + j;
-        
-        // We might have more threads than strips to process; if we do, just end the thread.
-        if (strip > arg->data->num_row_blocks - 1) {
-            pthread_exit(NULL);
-        }
-        
-        // Otherwise, for each block of columns, multiply the block and store the result.
-        for (int i = 0; i < arg->data->num_col_blocks; i++) multiply_block(A[strip][i].row, &arg->data->v[strip], &arg->data->result[strip]);
-
+// This is the function that dispatches work to all the threads.
+void linearMap(ThreadPool p, LinearMapData* data) {
+    _ThreadPool* pool = (_ThreadPool*) p;
+    ThreadArg* arg = malloc(sizeof(arg)); 
+    arg->data = data;
+    for (int i = 0; i < data->num_row_blocks; i++) { 
+        arg->strip = i;
+        enqueueTask(p, dot, &arg);
     }
-    // After processing all strips, end the thread.
-    // pthread_exit(NULL);
-    return NULL;
+    
+    return;
 }
 
-// This is the function that dispatches work to all the threads.  The k'th thread will be assigned all the rows j such that floor( j / MAX_THREADS ) = k
-void linearMap(LinearMapData* data) {
-
-    // Initialize an array of threads and the arguments that will be passed to them
-    pthread_t threads[MAX_THREADS];
-    ThreadArgs args[MAX_THREADS];
-    int rc; 
-    int MAX_THREAD_SPAWN = (data->num_row_blocks < MAX_THREADS) ? data->num_row_blocks : MAX_THREADS;
-
-    for (int i = 0; i < MAX_THREAD_SPAWN; i++) {
-        args[i].data = data;
-        args[i].threadID = i;
-    }        
-}
-*/
 void delete_rbm(RBM* r) {
 
 }
@@ -454,62 +438,38 @@ void testFunction(void* out) {
 }
 
 int main(void) {
+    // For tracking execution time 
+    clock_t start, end;
+    double cpu_time_used; 
 
-    // Initialize a vector of ones for sigmoid test
-    // float __attribute__ (( aligned(32) )) ones[2048] = {[0 ... 2047] = 1.0};
-    /*    
-    LinearMapData* data = createLinearMap(16,1000);
+    int num_threads = 64; 
+    ThreadPool p = createThreadPool(num_threads); 
+
+    LinearMapData* data = createLinearMap(3200,1000);
+    _ThreadPool* pool = (_ThreadPool*) p; 
+    ThreadArg arg; 
+    arg.data = data;
+    start = clock();
+    for (int j = 0; j < 1000; j++) {
+    for (int i = 0; i < data->num_row_blocks; i++) { 
+        arg.strip = i;
+        enqueueTask(p, dot, &arg);
+    }
+    }
+    end = clock();
+    //linearMap(p,data);
     
-    struct timespec tstart={0,0}, tend={0,0};
-    clock_gettime(CLOCK_MONOTONIC, &tstart);
-    for (int i = 0; i < NUM_TRIALS; i++)  linearMap(data);
-    clock_gettime(CLOCK_MONOTONIC, &tend);
-    printf("Matrix multiplication took about %lu nanoseconds\n",
-           (tend.tv_nsec - tstart.tv_nsec)/NUM_TRIALS);
-    
+    sleep(1);
+    destroyThreadPool(p);
+    //free(arg); 
+    cpu_time_used = 1e9*((double) (end - start)) / CLOCKS_PER_SEC / 1000; 
+    printf("Multithreaded version took about %lf nanoseconds\n", cpu_time_used);
+
     float* res2 = (float *) data->result;
     printf("%f %f %f %f %f %f %f %f \n", res2[0],res2[1],res2[2],res2[3],res2[4], res2[5], res2[6], res2[7]);
     
     destroyLinearMap(data);
-//    _mm_free(res);
-    */
 
-    /* TESTING THREADPOOL IMPLEMENTATION */
-    int num_threads = 4; 
-    clock_t start, end;
-    double cpu_time_used; 
-    ThreadPool p = createThreadPool(num_threads); 
-    int* out = malloc(8*sizeof(int));
-    memset(out,0,8*sizeof(int));
-
-    start = clock();
-    for (int j = 0; j < 8; j++) {
-        enqueueTask(p, &testFunction, (out+j));
-    }
-    end = clock();
-    cpu_time_used = 1e9*((double) (end - start)) / CLOCKS_PER_SEC; 
-    printf("Multithreaded version took about %lf nanoseconds\n", cpu_time_used);
-    sleep(1); 
-    destroyThreadPool(p);
-
-    printf("%d\n", out[0]);
-    printf("%d\n", out[1]);
-    printf("%d\n", out[2]);
-    printf("%d\n", out[3]);
-    printf("%d\n", out[4]);
-    printf("%d\n", out[5]);
-    printf("%d\n", out[6]);
-    printf("%d\n", out[7]);
-    memset(out, 0, 8*sizeof(int)); 
-    free(out);
-   /* 
-    clock_gettime(CLOCK_MONOTONIC, &tstart);
-    for (int i = 0; i < NUM_TRIALS; i++)  testFunction(&out);
-    clock_gettime(CLOCK_MONOTONIC, &tend);
-    printf("Normal version took about %lu nanoseconds\n",
-           (tend.tv_nsec - tstart.tv_nsec)/NUM_TRIALS);
-    printf("%d\n", out);
-   */ 
     return 0;
 
 }
@@ -540,14 +500,16 @@ LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols) {
     data->result = _mm_malloc(data->num_row_blocks * sizeof(float8), AVX2_BYTE_ALIGNMENT);
     for (int i = 0; i < data->num_row_blocks; i++) data->result[i] = _mm256_set1_ps(0.0); 
     
-    data->A = malloc(data->num_row_blocks * sizeof(Block *));
+    data->A = malloc(data->num_row_blocks * sizeof(Block *)); 
     for (int i = 0; i < data->num_row_blocks; i++) {
-        data->A[i] = malloc(data->num_col_blocks * sizeof(Block) );
+        if( (data->A[i] = malloc(data->num_col_blocks * sizeof(Block) )) == NULL){
+            printf("Failed to allocate memory for matrix");
+            exit(-1); 
+        }
         for (int j = 0; j < data->num_col_blocks; j++ ) {
             for (int k = 0; k < 8; k++) data->A[i][j].row[k] = _mm256_set1_ps(0.0);
         }
-    }
-
+    } 
     return data;
 }
 
@@ -562,3 +524,47 @@ void destroyLinearMap(LinearMapData* data) {
     data = NULL;
     return;
 }
+
+// OLD STUFF
+
+/*    
+    // Use the job scheduler to parallelize the execution of testFunction
+    for (int j = 0; j < 64; j++) {
+        enqueueTask(p, testFunction, (out+j));
+    }
+    end = clock();
+    sleep(1);
+    destroyThreadPool(p);
+    cpu_time_used = 1e9*((double) (end - start)) / CLOCKS_PER_SEC; 
+    printf("Multithreaded version took about %lf nanoseconds\n", cpu_time_used);
+    
+    // Start the test over, this time without using parallelism
+    memset(out,0,64*sizeof(int));
+    start = clock();
+    for (int j = 0; j < 64; j++) {
+        for (int i = 0; i < NUM_TRIALS; i++) {
+            out[j] += 1;
+        }
+    }
+    end = clock();
+    cpu_time_used = 1e9*((double) (end - start)) / CLOCKS_PER_SEC; 
+    printf("Normal version took about %lf nanoseconds\n", cpu_time_used);
+    
+
+    printf("%d\n", out[0]);
+    printf("%d\n", out[1]);
+    printf("%d\n", out[2]);
+    printf("%d\n", out[3]);
+    printf("%d\n", out[4]);
+    printf("%d\n", out[5]);
+    printf("%d\n", out[6]);
+    printf("%d\n", out[7]);
+    memset(out, 0, 8*sizeof(int)); 
+    free(out);
+    clock_gettime(CLOCK_MONOTONIC, &tstart);
+    for (int i = 0; i < NUM_TRIALS; i++)  testFunction(&out);
+    clock_gettime(CLOCK_MONOTONIC, &tend);
+    printf("Normal version took about %lu nanoseconds\n",
+           (tend.tv_nsec - tstart.tv_nsec)/NUM_TRIALS);
+    printf("%d\n", out);
+*/
