@@ -3,13 +3,15 @@
 This script provides utilities for training a restricted Boltzmann machine.  It is the C analogue of the Python scripts in the repository root directory.  We intend to get speedup here using Intel Intrinsics AVX2 SIMD instructions, together with multithreaded processing.
 
 */
+#include<string.h>
+#include<unistd.h>
 #include<pthread.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<stdint.h>
 #include<immintrin.h>
 #include<assert.h>
-#include <time.h>
+#include<time.h>
 
 #define float4 __m128
 #define float8 __m256
@@ -21,11 +23,10 @@ This script provides utilities for training a restricted Boltzmann machine.  It 
 #define int4 __m128i
 #define ulong2 __m128i
 
-#define CACHE_SIZE 128
 #define MAX_THREADS 128
-#define NANOSECONDS_PER_SECOND 1000000000
+#define NANOSECONDS_PER_SECOND 1e9
 #define AVX2_BYTE_ALIGNMENT 32
-#define NUM_TRIALS 1000
+#define NUM_TRIALS 100000
 
 /****** DEFINE THE RBM STRUCT INITIALIZER / DESTORYER *******/
 
@@ -199,6 +200,7 @@ ThreadPool createThreadPool(int num_threads) {
     }
     
     pool->size = 0;
+    pool->reject_new_work = 0;
     pool->num_threads = (num_threads > MAX_THREADS) ? MAX_THREADS : num_threads;
     pool->shutdown = 0;
     pool->head = NULL;
@@ -212,6 +214,10 @@ ThreadPool createThreadPool(int num_threads) {
         printf("Error encountered when initializing pthread_mutex_t\n");
         exit(-1);
     }
+    if( pthread_cond_init(&(pool->empty),NULL) ) {
+        printf("Error encountered when initializing pthread_cond_t\n");	
+        exit(-1); 
+    } 
     if( pthread_cond_init(&(pool->not_empty),NULL) ) {
         printf("Error encountered when initializing pthread_cond_t\n");	
         exit(-1); 
@@ -247,7 +253,7 @@ void destroyThreadPool(ThreadPool p) {
         // There may have been threads waiting at the initial mutex of our getWork function, in which case, they will not have received the OK signal. 
         pthread_cond_broadcast( &(pool->not_empty) );
 
-        // FIXME: Master thread can pass all pthread_cond_broadcasts before any of the worker threads have had a chance to hit the cond_wait.
+        // FIXME: Master thread can pass all pthread_cond_broadcasts before any of the worker threads have had a chance to hit the cond_wait.  This really only matters when you call destroyThreadPool *immediately* after createThreadPool without doing any work in between.
         pthread_join(pool->threads[i], NULL);
     }
     // All the parallel threads have been terminated.  Free the resources we malloc'd
@@ -293,7 +299,7 @@ typedef struct LinearMapData {
 LinearMapData* createLinearMap(uint32_t num_rows, uint32_t num_cols);
 void destroyLinearMap(LinearMapData* data);
 
-static inline float8 shuffle(void) {
+static inline uint8 shuffle(void) {
     return _mm256_set_epi32(7,3,6,2,5,1,4,0);
 }
 
@@ -440,6 +446,13 @@ float* sigmoid(float* x, unsigned int N) {
 
 }
 
+void testFunction(void* out) {
+    for (int i = 0; i < NUM_TRIALS; i++) {
+        *(int *)out += 1;
+    }
+    return;
+}
+
 int main(void) {
 
     // Initialize a vector of ones for sigmoid test
@@ -463,10 +476,40 @@ int main(void) {
 
     /* TESTING THREADPOOL IMPLEMENTATION */
     int num_threads = 4; 
-    
+    clock_t start, end;
+    double cpu_time_used; 
     ThreadPool p = createThreadPool(num_threads); 
+    int* out = malloc(8*sizeof(int));
+    memset(out,0,8*sizeof(int));
+
+    start = clock();
+    for (int j = 0; j < 8; j++) {
+        enqueueTask(p, &testFunction, (out+j));
+    }
+    end = clock();
+    cpu_time_used = 1e9*((double) (end - start)) / CLOCKS_PER_SEC; 
+    printf("Multithreaded version took about %lf nanoseconds\n", cpu_time_used);
+    sleep(1); 
     destroyThreadPool(p);
 
+    printf("%d\n", out[0]);
+    printf("%d\n", out[1]);
+    printf("%d\n", out[2]);
+    printf("%d\n", out[3]);
+    printf("%d\n", out[4]);
+    printf("%d\n", out[5]);
+    printf("%d\n", out[6]);
+    printf("%d\n", out[7]);
+    memset(out, 0, 8*sizeof(int)); 
+    free(out);
+   /* 
+    clock_gettime(CLOCK_MONOTONIC, &tstart);
+    for (int i = 0; i < NUM_TRIALS; i++)  testFunction(&out);
+    clock_gettime(CLOCK_MONOTONIC, &tend);
+    printf("Normal version took about %lu nanoseconds\n",
+           (tend.tv_nsec - tstart.tv_nsec)/NUM_TRIALS);
+    printf("%d\n", out);
+   */ 
     return 0;
 
 }
