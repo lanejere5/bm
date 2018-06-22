@@ -34,6 +34,8 @@ This class implements the pretraining of an autoencoder. It can be used as follo
     
 (see ``Examples.ipynb`` for more details).
 
+## Various results
+
 The type of autoencoder studied in this repository is not designed for data generation. Nevertheless, here are some examples of what sampling with the decoder portion of the model looks like:
 
 ![0](./images/generated.png)
