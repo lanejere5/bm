@@ -1,6 +1,6 @@
 # Deep autoencoder with RBM pretraining
 
-```Autoencoder.py``` defines a class that pretrains and unrolls a dense autoencoder, as described in "Reducing the Dimensionality of Data with Neural Networks" by Hinton and Salakhutdinov.  The layer dimensions are specified when the class is initialized.  In this repo I am trying to reproduce some of the results from that paper, as well as learn about autoencoders and Boltzmann machines.
+```Autoencoder.py``` defines a class that pretrains and unrolls a deep autoencoder, as described in "Reducing the Dimensionality of Data with Neural Networks" by Hinton and Salakhutdinov.  The layer dimensions are specified when the class is initialized.  In this repo I am trying to reproduce some of the results from that paper, as well as learn about autoencoders and Boltzmann machines.
 
 A longer discussion can be found in the notebook ``Examples.ipynb``.
 
