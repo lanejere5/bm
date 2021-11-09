@@ -1,12 +1,12 @@
 # Deep autoencoder with RBM pretraining
 
-```Autoencoder.py``` defines a class that pretrains and unrolls a deep autoencoder, as described in "Reducing the Dimensionality of Data with Neural Networks" by Hinton and Salakhutdinov.  The layer dimensions are specified when the class is initialized.  In this repo I am trying to reproduce some of the results from that paper, as well as learn about autoencoders and Boltzmann machines. A longer discussion can be found in the notebook ``Examples.ipynb``.
+```Autoencoder.py``` defines a class that pretrains and unrolls a deep autoencoder, as described in "Reducing the Dimensionality of Data with Neural Networks" by Hinton and Salakhutdinov.  The layer dimensions are specified when the class is initialized.  In this repo I am learning about autoencoders and Boltzmann machines by coding them from scratch.
 
-In ``/src``, James Mracek is working on optimizing the code in ``RBM.py`` using AVC. 
+In ``/src``, James Mracek was experimenting with optimizing the code in ``RBM.py`` using AVC. 
 
 ## ```RBM.py```
 
-This class implements a restricted Boltzmann machine.  Here is an example of what reconstructing a MNIST digit with the RBM looks like (see ``Examples.ipynb`` for more).
+This class implements a restricted Boltzmann machine.  Here is an example of what reconstructing a MNIST digit with the RBM looks like.
 
 ![0](./images/reconstructed.png)
 
@@ -31,18 +31,3 @@ This class implements the pretraining of an autoencoder. It can be used as follo
     model.compile(optimizer = 'rmsprop', loss = 'mse')
     model.fit(x.T,x.T,epochs = 20, batch_size=10)
     model.save("file.h5")
-    
-(see ``Examples.ipynb`` for more details).
-
-## Various results
-
-The type of autoencoder studied in this repository is not designed for data generation. Nevertheless, here are some examples of what sampling with the decoder portion of the model looks like:
-
-![0](./images/generated.png)
-
-The encoder can be quickly adapted for classification by freezing weights and adding a few extra trainable layers.
-
-![0](./images/classification.png)
-
-
-    
